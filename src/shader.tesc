@@ -6,7 +6,7 @@ in vec3 color[];
 
 out vec3 ts_color[];
 
-int tess_level = 100;
+uniform int tess_level;
 
 
 void main() {

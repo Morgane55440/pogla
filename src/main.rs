@@ -1,12 +1,22 @@
+use anyhow::Result;
 use glium::winit::{
-    self, application::ApplicationHandler, dpi::PhysicalSize, event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent}, event_loop::ActiveEventLoop, window::{Window, WindowId}
+    self,
+    application::ApplicationHandler,
+    dpi::PhysicalSize,
+    event::{DeviceEvent, DeviceId, ElementState, KeyEvent, MouseButton, WindowEvent},
+    event_loop::ActiveEventLoop,
+    keyboard::{KeyCode, PhysicalKey},
+    window::{Window, WindowId},
 };
 use glium::{
-    self, glutin::surface::WindowSurface, implement_vertex, index::{NoIndices, PrimitiveType},
-    program::SourceCode, uniform, Display, Program, Surface, VertexBuffer,
+    self,
+    glutin::surface::WindowSurface,
+    implement_vertex,
+    index::{NoIndices, PrimitiveType},
+    program::SourceCode,
+    uniform, Display, Program, Surface, VertexBuffer,
 };
-use anyhow::Result;
-use std::{f32::consts::PI, ops::Range, time::SystemTime};
+use std::{f32::consts::PI, num::NonZero, ops::Range, time::SystemTime};
 
 #[derive(Copy, Clone)]
 struct TwoDVertex {
@@ -27,34 +37,61 @@ struct App {
     indices: NoIndices,
     program: Program,
     start: SystemTime,
-    camera : Camera
+    simulation_details: SimulationDetail,
+    camera: Camera,
+}
+#[derive(Copy, Clone, Debug)]
+pub struct SimulationDetail {
+    pub tesselation_level: NonZero<u8>,
+    pub seed: f32,
+}
+
+impl Default for SimulationDetail {
+    fn default() -> Self {
+        Self {
+            tesselation_level: NonZero::new(100).unwrap(),
+            seed: 0.0,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
 pub struct Camera {
-    pub distance : f32,
-    pub theta : f32,
-    pub phi : f32,
-    pub is_moving : bool,
-    pub aspect_ratio : f32
+    pub distance: f32,
+    pub theta: f32,
+    pub phi: f32,
+    pub is_moving: bool,
+    pub aspect_ratio: f32,
 }
 
 impl Camera {
-
-    fn new(distance : f32, theta : f32, phi : f32, windowsize : PhysicalSize<u32>) -> Self {
+    fn new(distance: f32, theta: f32, phi: f32, windowsize: PhysicalSize<u32>) -> Self {
         let aspect_ratio = windowsize.width as f32 / windowsize.height as f32;
-        Self { distance, theta, phi, is_moving: false, aspect_ratio }
+        Self {
+            distance,
+            theta,
+            phi,
+            is_moving: false,
+            aspect_ratio,
+        }
     }
 
-    fn update_size(&mut self, windowsize : PhysicalSize<u32>) {
+    fn update_size(&mut self, windowsize: PhysicalSize<u32>) {
         self.aspect_ratio = windowsize.width as f32 / windowsize.height as f32;
     }
     fn view_matrix(self) -> [[f32; 4]; 4] {
-        let (cos1, cos2, sin1, sin2) = (self.phi.cos(), self.theta.cos(),self.phi.sin(), self.theta.sin());
-        [[cos1, sin1*sin2, -sin1*cos2, 0.00000],
-        [0.00000, cos2, sin2, 0.00000],   
-        [sin1, -sin2*cos1, cos1*cos2, 0.00000],
-        [0.00000, 0.00000, -self.distance, 1.00000]]
+        let (cos1, cos2, sin1, sin2) = (
+            self.phi.cos(),
+            self.theta.cos(),
+            self.phi.sin(),
+            self.theta.sin(),
+        );
+        [
+            [cos1, sin1 * sin2, -sin1 * cos2, 0.00000],
+            [0.00000, cos2, sin2, 0.00000],
+            [sin1, -sin2 * cos1, cos1 * cos2, 0.00000],
+            [0.00000, 0.00000, -self.distance, 1.00000],
+        ]
     }
 }
 
@@ -74,7 +111,8 @@ impl App {
             indices,
             program,
             start: SystemTime::now(),
-            camera : Camera::new(15.0, 0.15 * PI, 0.5 * PI, window_size)
+            camera: Camera::new(15.0, 0.15 * PI, 0.5 * PI, window_size),
+            simulation_details: Default::default(),
         }
     }
 }
@@ -93,7 +131,7 @@ impl ApplicationHandler for App {
             WindowEvent::Resized(size) => {
                 self.display.resize(size.into());
                 self.camera.update_size(size);
-            } ,
+            }
             WindowEvent::RedrawRequested => {
                 let mut frame = self.display.draw();
                 frame.clear_color(0.4, 0.4, 0.4, 1.0);
@@ -110,42 +148,66 @@ impl ApplicationHandler for App {
                         &self.buffer,
                         self.indices,
                         &self.program,
-                        &uniform! { anim_time : t , model_view_matrix : self.camera.view_matrix(), aspect_ratio : self.camera.aspect_ratio, seed : 0.0f32 },
+                        &uniform! { anim_time : t , model_view_matrix : self.camera.view_matrix(), aspect_ratio : self.camera.aspect_ratio, seed : self.simulation_details.seed, tess_level : i32::from(self.simulation_details.tesselation_level.get())},
                         &Default::default(),
                     )
                     .unwrap();
                 frame.finish().unwrap();
                 self.window.request_redraw();
-            },
-            WindowEvent::CursorLeft { .. } | WindowEvent::MouseInput { state : ElementState::Released, button : MouseButton::Left, .. } => {
+            }
+            WindowEvent::CursorLeft { .. }
+            | WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } => {
                 self.camera.is_moving = false;
-            },
-            WindowEvent::MouseInput { state : ElementState::Pressed, button : MouseButton::Left, .. } => {
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => {
                 self.camera.is_moving = true;
+            }
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
+                        physical_key: PhysicalKey::Code(keycode),
+                        ..
+                    },
+                ..
+            } => {
+                let level = &mut self.simulation_details.tesselation_level;
+                match keycode {
+                    KeyCode::NumpadAdd => *level = level.saturating_add(1),
+                    KeyCode::NumpadSubtract => {
+                        *level = NonZero::new(level.get() - 1).unwrap_or(NonZero::new(1).unwrap())
+                    }
+                    _ => (),
+                }
             }
             _ => (),
         }
     }
 
     fn device_event(
-            &mut self,
-            _event_loop: &ActiveEventLoop,
-            _device_id: DeviceId,
-            event: DeviceEvent,
-        ) {
-        match event {
-            DeviceEvent::MouseMotion { delta : (x,y) } => {
-                if self.camera.is_moving {
-                    self.camera.phi = modular_clamp(self.camera.phi + 0.002 * x as f32, 0.0..(2.0 * PI));
-                    self.camera.theta = (self.camera.theta + 0.01 * y as f32).clamp(0.02 * PI, 0.5 * PI)
-                }
-            },
-            _ => ()
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        if let DeviceEvent::MouseMotion { delta: (x, y) } = event {
+            if self.camera.is_moving {
+                self.camera.phi =
+                    modular_clamp(self.camera.phi + 0.002 * x as f32, 0.0..(2.0 * PI));
+                self.camera.theta = (self.camera.theta + 0.01 * y as f32).clamp(0.02 * PI, 0.5 * PI)
+            }
         }
     }
 }
 
-fn modular_clamp(mut x : f32, range : Range<f32>) -> f32 {
+fn modular_clamp(mut x: f32, range: Range<f32>) -> f32 {
     while x < range.start {
         x += range.end - range.start;
     }
@@ -155,8 +217,7 @@ fn modular_clamp(mut x : f32, range : Range<f32>) -> f32 {
     x
 }
 fn main() -> Result<()> {
-    let event_loop = winit::event_loop::EventLoop::builder()
-        .build()?;
+    let event_loop = winit::event_loop::EventLoop::builder().build()?;
     let (window, display) = glium::backend::glutin::SimpleWindowBuilder::new().build(&event_loop);
 
     let square: [ThreeDVertex; 4] = include!("square.in");
