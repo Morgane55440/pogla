@@ -1,0 +1,6 @@
+[
+    ThreeDVertex { position : [-0.5f32, 0.0, 0.5] },
+    ThreeDVertex { position : [0.5, 0.0, 0.5] },
+    ThreeDVertex { position : [0.5, 0.0, -0.5] },
+    ThreeDVertex { position : [-0.5, 0.0, -0.5] }
+]
