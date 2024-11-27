@@ -1,5 +1,5 @@
 use anyhow::Result;
-use glium::winit::{
+use glium::{uniforms::Uniforms, winit::{
     self,
     application::ApplicationHandler,
     dpi::PhysicalSize,
@@ -7,7 +7,7 @@ use glium::winit::{
     event_loop::ActiveEventLoop,
     keyboard::{KeyCode, PhysicalKey},
     window::{Window, WindowId},
-};
+}, BackfaceCullingMode, Blend, Depth, DepthTest, DrawError, DrawParameters, Frame};
 use glium::{
     self,
     glutin::surface::WindowSurface,
@@ -16,6 +16,7 @@ use glium::{
     program::SourceCode,
     uniform, Display, Program, Surface, VertexBuffer,
 };
+use rand::random;
 use std::{f32::consts::PI, num::NonZero, ops::Range, time::SystemTime};
 
 #[derive(Copy, Clone)]
@@ -30,12 +31,18 @@ struct ThreeDVertex {
 }
 implement_vertex!(ThreeDVertex, position);
 
+
+#[derive(Copy, Clone)]
+struct FourDVertex {
+    position: [f32; 4],
+}
+implement_vertex!(FourDVertex, position);
+
 struct App {
     window: Window,
     display: Display<WindowSurface>,
-    buffer: VertexBuffer<ThreeDVertex>,
-    indices: NoIndices,
-    program: Program,
+    plane_draw : DrawData<ThreeDVertex>,
+    island_draw: DrawData<ThreeDVertex>,
     start: SystemTime,
     simulation_details: SimulationDetail,
     camera: Camera,
@@ -49,7 +56,7 @@ pub struct SimulationDetail {
 impl Default for SimulationDetail {
     fn default() -> Self {
         Self {
-            tesselation_level: NonZero::new(100).unwrap(),
+            tesselation_level: NonZero::new(20).unwrap(),
             seed: 0.0,
         }
     }
@@ -99,20 +106,18 @@ impl App {
     fn new(
         window: Window,
         display: Display<WindowSurface>,
-        buffer: VertexBuffer<ThreeDVertex>,
-        indices: NoIndices,
-        program: Program,
+        island_draw : DrawData<ThreeDVertex>,
+        plane_draw : DrawData<ThreeDVertex>,
     ) -> Self {
         let window_size = window.inner_size();
         Self {
             window,
             display,
-            buffer,
-            indices,
-            program,
+            island_draw,
+            plane_draw,
             start: SystemTime::now(),
-            camera: Camera::new(15.0, 0.15 * PI, 0.5 * PI, window_size),
-            simulation_details: Default::default(),
+            camera: Camera::new(17.0, 0.15 * PI, 0.5 * PI, window_size),
+            simulation_details: Default::default()
         }
     }
 }
@@ -134,7 +139,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 let mut frame = self.display.draw();
-                frame.clear_color(0.4, 0.4, 0.4, 1.0);
+                frame.clear_color_and_depth((0.15, 0.15, 0.6, 1.0), 1.0);
 
                 let t = SystemTime::now()
                     .duration_since(self.start)
@@ -142,16 +147,17 @@ impl ApplicationHandler for App {
                     .unwrap_or(0.0);
 
                 //self.camera.phi = PI * (0.5 + t / 20.0);
+                self.plane_draw.draw(
+                    &mut frame,
+                    &uniform! { anim_time : t , model_view_matrix : self.camera.view_matrix(), aspect_ratio : self.camera.aspect_ratio, seed : self.simulation_details.seed, tess_level : 4 * i32::from(self.simulation_details.tesselation_level.get())}
+                ).unwrap();
 
-                frame
-                    .draw(
-                        &self.buffer,
-                        self.indices,
-                        &self.program,
-                        &uniform! { anim_time : t , model_view_matrix : self.camera.view_matrix(), aspect_ratio : self.camera.aspect_ratio, seed : self.simulation_details.seed, tess_level : i32::from(self.simulation_details.tesselation_level.get())},
-                        &Default::default(),
-                    )
-                    .unwrap();
+                frame.clear_depth(1.0);
+
+                self.island_draw.draw(
+                    &mut frame,
+                    &uniform! { anim_time : t , model_view_matrix : self.camera.view_matrix(), aspect_ratio : self.camera.aspect_ratio, seed : self.simulation_details.seed, tess_level :  i32::from(self.simulation_details.tesselation_level.get())}
+                ).unwrap();
                 frame.finish().unwrap();
                 self.window.request_redraw();
             }
@@ -180,9 +186,13 @@ impl ApplicationHandler for App {
             } => {
                 let level = &mut self.simulation_details.tesselation_level;
                 match keycode {
-                    KeyCode::NumpadAdd => *level = level.saturating_add(1),
-                    KeyCode::NumpadSubtract => {
+                    KeyCode::NumpadAdd => *level = level.saturating_add(1)
+                    ,
+                    KeyCode::NumpadSubtract => 
                         *level = NonZero::new(level.get() - 1).unwrap_or(NonZero::new(1).unwrap())
+                    ,
+                    KeyCode::KeyS => {
+                        self.simulation_details.seed = random();
                     }
                     _ => (),
                 }
@@ -216,17 +226,60 @@ fn modular_clamp(mut x: f32, range: Range<f32>) -> f32 {
     }
     x
 }
+
+#[derive(Debug)]
+struct DrawData<T : Copy> {
+    buffer: VertexBuffer<T>,
+    indices: NoIndices,
+    program: Program,
+    drawparam : DrawParameters<'static>
+}
+
+impl<T : Copy> DrawData<T> {
+    fn draw<U: Uniforms>(&self, frame : &mut Frame, uniforms : &U) -> Result<(), DrawError> {
+        frame.draw(&self.buffer, self.indices, &self.program, uniforms, &self.drawparam)
+    }
+}
 fn main() -> Result<()> {
     let event_loop = winit::event_loop::EventLoop::builder().build()?;
     let (window, display) = glium::backend::glutin::SimpleWindowBuilder::new().build(&event_loop);
 
     let square: [ThreeDVertex; 4] = include!("square.in");
-    let vertex_buffer = VertexBuffer::new(&display, &square)?;
-    let indices = NoIndices(PrimitiveType::Patches {
-        vertices_per_patch: 4,
-    });
 
-    let program = Program::new(
+    let plane_vertex_buffer = VertexBuffer::new(&display, &square)?;
+
+    let plane_program = Program::new(
+        &display,
+        SourceCode {
+            vertex_shader: include_str!("plane.vert"),
+            fragment_shader: include_str!("plane.frag"),
+            tessellation_control_shader: Some(include_str!("plane.tesc")),
+            tessellation_evaluation_shader: Some(   include_str!("plane.tese")),
+            geometry_shader: None,
+        },
+    )?;
+
+    let plane_call = DrawData {
+        buffer : plane_vertex_buffer,
+        indices : NoIndices(PrimitiveType::Patches {
+            vertices_per_patch: 4,
+        }),
+        program : plane_program,
+        drawparam : DrawParameters { depth: Depth {
+            test : DepthTest::IfLess,
+            write : true,
+            ..Default::default()
+        },
+        backface_culling : BackfaceCullingMode::CullingDisabled,
+        blend : Blend::alpha_blending(),
+         ..Default::default() }
+    };
+
+
+
+    let island_vertex_buffer = VertexBuffer::new(&display, &square)?;
+
+    let island_program = Program::new(
         &display,
         SourceCode {
             vertex_shader: include_str!("shader.vert"),
@@ -237,7 +290,22 @@ fn main() -> Result<()> {
         },
     )?;
 
-    let mut app = App::new(window, display, vertex_buffer, indices, program);
+    let island_call = DrawData {
+        buffer : island_vertex_buffer,
+        indices : NoIndices(PrimitiveType::Patches {
+            vertices_per_patch: 4,
+        }),
+        program : island_program,
+        drawparam : DrawParameters { depth: Depth {
+            test : DepthTest::IfLess,
+            write : true,
+            ..Default::default()
+        },
+        backface_culling : BackfaceCullingMode::CullClockwise,
+         ..Default::default() }
+    };
+
+    let mut app = App::new(window, display, island_call, plane_call);
 
     event_loop.run_app(&mut app).map_err(anyhow::Error::from)
 }

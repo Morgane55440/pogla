@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 glium = "0.36.0"
 anyhow = "1.0.93"
+rand = "0.8.5"
