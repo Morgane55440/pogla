@@ -2,9 +2,14 @@
 layout( quads,equal_spacing,ccw) in;
 
 
-out vec4 color;
+out vec3 pos;
+out float transparency;
+out vec2 tex_coord;
 
 uniform float anim_time;
+uniform float water_size;
+
+uniform float daytime;
 
 uniform float aspect_ratio;
 
@@ -23,20 +28,28 @@ void main(){
   vec4 p = mix(p1 ,p2 ,gl_TessCoord.y);
   
 
-  gl_Position =  p ;
 
     float near = 2.4;
     float far = 3.6;
   if (length(p) < near) {
-    color = vec4(0.0, 0.0,0.7, 1.0);
+    transparency = 1.0;
   } else if (length(p) > far) {
-    color = vec4(0.15, 0.15, 0.6, 0.0);
+    transparency = 0.0;
   } else {
-    float nu = ((length(p) - near) / (far - near)) * ((length(p) - near) / (far - near));
-    color = nu * vec4(0.15, 0.15, 0.6, 0.0) + (1-nu) * vec4(0.0, 0.0,0.7, 1.0);
+    transparency = 1.0 - ((length(p) - near) / (far - near)) * ((length(p) - near) / (far - near));
   }
+  
+  pos = p.xyz;
 
-  gl_Position = projection_matrix * model_view_matrix * gl_Position;
+  float tex_x = mod(p.x * water_size, 1.0) / 40;
+  float tex_y = mod(p.z * water_size, 1.0);
+
+  float xoffset = floor(mod(floor(anim_time * 20.0), 40.0)) / 40.0;
+
+  tex_coord = vec2(tex_x + xoffset, tex_y);
+
+
+  gl_Position = projection_matrix * model_view_matrix * p;
   if (aspect_ratio < 1.0) {
     gl_Position.y *= aspect_ratio;
 

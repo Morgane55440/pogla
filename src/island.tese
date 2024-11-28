@@ -2,13 +2,17 @@
 layout( quads,equal_spacing,ccw) in;
 
 
-out vec3 color;
+#define NOISE_NB 3
+
+out vec4 color;
 
 uniform float anim_time;
 
 uniform float aspect_ratio;
 
 uniform float seed;
+
+uniform float daytime;
 
 uniform mat4 model_view_matrix;
 mat4 projection_matrix = mat4(
@@ -86,6 +90,16 @@ float snoise(vec2 v, float ampl)
   return ampl * dot(m, g);
 }
 
+struct Noise {
+    float freq;
+    float ampl;
+};
+
+float compute_noise(vec2 p, Noise noise) {
+    return snoise(p * noise.freq, noise.ampl);
+}
+
+
 
 
 float falloff_radius = 1.0;
@@ -93,16 +107,18 @@ float falloff_radius = 1.0;
 float fall_off(vec2 v) {
     float dx = (abs(v.x) / falloff_radius);
     float dz = (abs(v.y) / falloff_radius);
-    return 1.0 - min(1.0, (dx * dx * dx + dz * dz * dz));
+    return 1.0 - min(1.0, (dx * dx  + dz * dz ));
 }
 
-vec3 snoise_normal(vec2 v, float ampl)
+vec3 snoise_normal(vec2 v, Noise noises[NOISE_NB])
 {
     float epsilon = 0.0001;
-
-    float dx = (snoise(v + vec2(epsilon, 0.0), ampl) - snoise(v - vec2(epsilon, 0.0), ampl)) *  fall_off(v);
-    float dz = (snoise(v + vec2(0.0, epsilon), ampl) - snoise(v - vec2(0.0, epsilon), ampl)) * fall_off(v);
-
+    float dx = 0;
+    float dz = 0;
+    for (int i = 0; i < NOISE_NB; ++i) {
+        dx += (compute_noise(v + vec2(epsilon, 0.0), noises[i]) - compute_noise(v - vec2(epsilon, 0.0), noises[i])) *  fall_off(v);
+        dz += (compute_noise(v + vec2(0.0, epsilon), noises[i]) - compute_noise(v - vec2(0.0, epsilon), noises[i])) *  fall_off(v);
+    }
     return normalize(vec3(-dx/epsilon, 1.0, -dz/epsilon));
 }
 
@@ -149,6 +165,16 @@ float lighten_up(float f) {
     return min(1.0, 4.0 * f);
 }
 
+float compute_noises(vec2 v, Noise noises[NOISE_NB]){
+    float res = 0.0;
+    for (int i = 0; i < NOISE_NB; ++i) {
+        res += compute_noise(v , noises[i]);
+    }
+    return res;
+}
+
+
+
 void main(){
   vec4 p1 = mix(gl_in[0].gl_Position,gl_in[1].gl_Position,gl_TessCoord.x);
   vec4 p2 = mix(gl_in[3].gl_Position,gl_in[2].gl_Position,gl_TessCoord.x);
@@ -158,40 +184,67 @@ void main(){
   waves[1] = make_wave(0.45359512, 0.09, 0.01, 0.0);
   waves[2] = make_wave(0.02, 0.4, 0.025,0.7);
 
+  Noise noises[NOISE_NB];
+
+  noises[0].freq = 1.0;
+  noises[0].ampl = 25;
+  
+  float base_noise = compute_noise(p.xz, noises[0]);
+
+  noises[1].freq = 5.0;
+  noises[1].ampl = base_noise * base_noise * 200;
+
+  
+  noises[2].freq = 25.0;
+  noises[2].ampl = base_noise * base_noise * 40;
+
+  if (base_noise * fall_off(p.xz) <= 0.175) {
+    float desent = 1.0 / ((0.175 - base_noise * fall_off(p.xz) )  * 5.0 + 1.0);
+    noises[2].ampl *= desent * desent * desent;
+  }
+
+
   gl_Position =  (
-      p + (vec4(0.0,snoise(p.xz, 25), 0.0,0.0) + 0.1) * fall_off(p.xz)
+      p + (
+        0.1 + vec4(0.0,compute_noises(p.xz, noises), 0.0,0.0)
+      ) 
+      
+      * fall_off(p.xz)
     //+ compute_y_sin_wave(waves[0], p.xyz)
     //+ compute_y_sin_wave(waves[1], p.xyz)
     //+ compute_y_sin_wave(waves[2], p.xyz)
   );
   vec3 normalWS = vec3(0.0, 0.0, 0.0);
 
-  if (gl_Position.y <= 0.0) {
-    gl_Position.y = 0.0;
-    normalWS = vec3(0.0,1.0,0.0);
-  } else {
-    for (int i = 0; i < 3; ++i ) {
-        normalWS += normal(waves[i], p.xyz);
-    }
 
-  }
+    normalWS = snoise_normal(p.xz, noises);
+    vec4 raw_color = vec4(0.0, 0.6,0.0, 1.0);
 
 
-    normalWS = snoise_normal(p.xz, 20);
-    vec3 raw_color = vec3(0.0, 0.6,0.0);
     if (gl_Position.y <= 0.01) {
-        raw_color = vec3(0.5, 0.5, 0.0);
+        raw_color = vec4(0.5, 0.5, 0.0, 1.0);
+    } else {
+        Noise choice_noise;
+        choice_noise.freq = 8;
+        choice_noise.ampl = 2;
+        float y = gl_Position.y + compute_noise(p.xz, choice_noise);
+        if (y >= 0.16) {
+            raw_color = vec4(0.3, 0.3, 0.3, 1.0);
+        } else {
+            noises[0].freq = 0.6;
+            if (compute_noises(p.xz + 10.0, noises) > 0.07) {
+                raw_color = vec4(0.0, 0.35,0.0, 1.0);
+            }
+        }
+
     }
-    if (gl_Position.y <= 0.0001) {
-        raw_color = vec3(0.0, 0.0,0.8);
-    }
-    if (gl_Position.y >= 0.18) {
-        raw_color = vec3(0.3, 0.3, 0.3);
-    }
-    color = max(dot(normalize(normalWS), normalize(vec3(1.0,4.0,1.0))), 0.0) * raw_color;
+
+    vec3 sun_pos = vec3(20.0, -200 * cos(daytime * PI / 12), 200 * sin(daytime * PI / 12));
+    color = max(dot(normalize(normalWS), normalize(sun_pos - p.xyz)), 0.1) * raw_color;
+    color.w = 1.0;
   
     if (gl_Position.y <= 0.0001) {
-        color = vec3(0.0, 0.0,0.7);
+        color = vec4(0.5, 0.5,0.0, 0.0);
     }
 
   gl_Position = projection_matrix * model_view_matrix * gl_Position;
