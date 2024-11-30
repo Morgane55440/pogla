@@ -1,11 +1,6 @@
 use anyhow::Result;
 use glium::winit::{
-    application::ApplicationHandler,
-    dpi::PhysicalSize,
-    event::{DeviceEvent, DeviceId, ElementState, KeyEvent, MouseButton, WindowEvent},
-    event_loop::{ActiveEventLoop, EventLoop},
-    keyboard::{KeyCode, PhysicalKey},
-    window::{Window, WindowId},
+    application::ApplicationHandler, dpi::PhysicalSize, event::{DeviceEvent, DeviceId, ElementState, KeyEvent, MouseButton, WindowEvent}, event_loop::{ActiveEventLoop, EventLoop}, keyboard::{KeyCode, PhysicalKey}, window::{Window, WindowId}
 };
 use glium::{
     self,
@@ -47,6 +42,10 @@ struct App {
     display: Display<WindowSurface>,
     plane_draw: DrawData<ThreeDVertex>,
     island_draw: DrawData<ThreeDVertex>,
+    tree_draw: DrawData<TwoDVertex>,
+    draw_sea : bool,
+    draw_island : bool,
+    draw_trees : bool,
     start: SystemTime,
     simulation_details: SimulationDetail,
     water_tex: Texture2d,
@@ -115,6 +114,7 @@ impl App {
         display: Display<WindowSurface>,
         island_draw: DrawData<ThreeDVertex>,
         plane_draw: DrawData<ThreeDVertex>,
+        tree_draw : DrawData<TwoDVertex>,
         water_tex: Texture2d,
     ) -> Self {
         let window_size = window.inner_size();
@@ -123,6 +123,10 @@ impl App {
             display,
             island_draw,
             plane_draw,
+            tree_draw,
+            draw_sea : true,
+            draw_island : true,
+            draw_trees : true,
             water_tex,
             water_size : 4.0,
             daytime : 10.0,
@@ -157,18 +161,27 @@ impl ApplicationHandler for App {
                     .map(|d| d.as_micros() as f32 * 0.000_001)
                     .unwrap_or(0.0);
 
-                //self.camera.phi = PI * (0.5 + t / 20.0);
-                self.plane_draw.draw(
-                    &mut frame,
-                    &uniform! { anim_time : t , model_view_matrix : self.camera.view_matrix(), aspect_ratio : self.camera.aspect_ratio, seed : self.simulation_details.seed, tess_level : 64, water_tex : &self.water_tex, water_size : self.water_size, daytime : self.daytime }
-                ).unwrap();
+                if self.draw_sea {
+                    self.plane_draw.draw(
+                        &mut frame,
+                        &uniform! { anim_time : t , model_view_matrix : self.camera.view_matrix(), aspect_ratio : self.camera.aspect_ratio, seed : self.simulation_details.seed, tess_level : 64, water_tex : &self.water_tex, water_size : self.water_size, daytime : self.daytime }
+                    ).unwrap()
+                }
 
                 frame.clear_depth(1.0);
 
-                self.island_draw.draw(
-                    &mut frame,
-                    &uniform! { anim_time : t , model_view_matrix : self.camera.view_matrix(), aspect_ratio : self.camera.aspect_ratio, seed : self.simulation_details.seed, tess_level :  i32::from(self.simulation_details.tesselation_level.get()), daytime : self.daytime}
-                ).unwrap();
+                if self.draw_island {
+                    self.island_draw.draw(
+                        &mut frame,
+                        &uniform! { anim_time : t , model_view_matrix : self.camera.view_matrix(), aspect_ratio : self.camera.aspect_ratio, seed : self.simulation_details.seed, tess_level :  i32::from(self.simulation_details.tesselation_level.get()), daytime : self.daytime}
+                    ).unwrap()
+                }
+
+                if self.draw_trees {
+                    self.tree_draw.draw(&mut frame, &uniform! { model_view_matrix : self.camera.view_matrix(), aspect_ratio : self.camera.aspect_ratio, seed : self.simulation_details.seed, daytime : self.daytime}
+                    ).unwrap()
+                }
+
                 frame.finish().unwrap();
                 self.window.request_redraw();
             }
@@ -203,7 +216,7 @@ impl ApplicationHandler for App {
                     KeyCode::NumpadSubtract => {
                         *level = NonZero::new(level.get() - 1).unwrap_or(NonZero::new(1).unwrap())
                     }
-                    KeyCode::KeyS if !repeat => {
+                    KeyCode::KeyR if !repeat => {
                         self.simulation_details.seed = random();
                     },
                     KeyCode::KeyO => {
@@ -219,6 +232,16 @@ impl ApplicationHandler for App {
                             self.daytime -= 24.0
                         }
                     },
+                    KeyCode::KeyS if !repeat => {
+                        self.draw_sea = !self.draw_sea
+                    },
+                    KeyCode::KeyG if !repeat => {
+                        self.draw_island = !self.draw_island
+                    },
+                    KeyCode::KeyT if !repeat => {
+                        self.draw_trees = !self.draw_trees
+                    },
+
                     _ => (),
                 }
             }
@@ -280,7 +303,10 @@ fn main() -> Result<()> {
     let water_src = RawImage2d::from_raw_rgba_reversed(water_src.as_raw(), water_src.dimensions());
 
     let event_loop = EventLoop::builder().build()?;
-    let (window, display) = SimpleWindowBuilder::new().build(&event_loop);
+    
+
+
+    let (window, display) = SimpleWindowBuilder::new().with_title("my little island").build(&event_loop);
 
     let water_tex = Texture2d::new(&display, water_src)?;
 
@@ -372,7 +398,47 @@ fn main() -> Result<()> {
         },
     };
 
-    let mut app = App::new(window, display, island_call, plane_call, water_tex);
+
+    let tree_roots : Vec<_> = (0..500).map(|i| {
+        let f = i as f32;
+        TwoDVertex {
+            position : [
+                (f / 300.0).sqrt() * 1.5 * f.sin(),
+                (f / 300.0).sqrt() * 1.5 * f.cos()
+            ]
+        }
+    }).collect();
+
+    let tree_roots_buffer = VertexBuffer::new(&display, &tree_roots)?;
+
+
+    let tree_program = Program::new(
+        &display,
+        SourceCode {
+            vertex_shader: include_str!("trees.vert"),
+            fragment_shader: include_str!("trees.frag"),
+            tessellation_control_shader: None,
+            tessellation_evaluation_shader: None,
+            geometry_shader: Some(include_str!("trees.geom")),
+        },
+    )?;
+
+    let tree_call = DrawData {
+        buffer: tree_roots_buffer,
+        indices: NoIndices(PrimitiveType::Points),
+        program: tree_program,
+        drawparam: DrawParameters {
+            depth: Depth {
+                test: DepthTest::IfLess,
+                write: true,
+                ..Default::default()
+            },
+            backface_culling: BackfaceCullingMode::CullClockwise,
+            ..Default::default()
+        },
+    };
+
+    let mut app = App::new(window, display, island_call, plane_call, tree_call, water_tex);
 
     event_loop.run_app(&mut app).map_err(anyhow::Error::from)
 }

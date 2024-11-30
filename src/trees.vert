@@ -1,5 +1,8 @@
 #version 450
-layout( quads,equal_spacing,ccw) in;
+
+in vec2 position;
+
+
 
 
 #define NOISE_NB 3
@@ -137,17 +140,16 @@ float compute_noises(vec2 v, Noise noises[NOISE_NB]){
 
 
 
-void main(){
-  vec4 p1 = mix(gl_in[0].gl_Position,gl_in[1].gl_Position,gl_TessCoord.x);
-  vec4 p2 = mix(gl_in[3].gl_Position,gl_in[2].gl_Position,gl_TessCoord.x);
-  vec4 p = mix(p1 ,p2 ,gl_TessCoord.y);
+
+
+void main() {
 
   Noise noises[NOISE_NB];
 
   noises[0].freq = 1.0;
   noises[0].ampl = 25;
   
-  float base_noise = compute_noise(p.xz, noises[0]);
+  float base_noise = compute_noise(position, noises[0]);
 
   noises[1].freq = 5.0;
   noises[1].ampl = base_noise * base_noise * 200;
@@ -156,60 +158,28 @@ void main(){
   noises[2].freq = 25.0;
   noises[2].ampl = base_noise * base_noise * 40;
 
-  if (base_noise * fall_off(p.xz) <= 0.175) {
-    float desent = 1.0 / ((0.175 - base_noise * fall_off(p.xz) )  * 5.0 + 1.0);
+  if (base_noise * fall_off(position) <= 0.175) {
+    float desent = 1.0 / ((0.175 - base_noise * fall_off(position) )  * 5.0 + 1.0);
     noises[2].ampl *= desent * desent * desent;
   }
 
+    float height = (compute_noises(position, noises) + 0.1) * fall_off(position);
 
-  gl_Position =  (
-      p + (
-        vec4(0.0,0.1,0.0,0.0) + vec4(0.0,compute_noises(p.xz, noises), 0.0,0.0)
-      ) 
-      
-      * fall_off(p.xz)
-    //+ compute_y_sin_wave(waves[0], p.xyz)
-    //+ compute_y_sin_wave(waves[1], p.xyz)
-    //+ compute_y_sin_wave(waves[2], p.xyz)
-  );
-  vec3 normalWS = vec3(0.0, 0.0, 0.0);
+  gl_Position = vec4(position.x, -1.0, position.y, 1.0);
 
-
-    normalWS = snoise_normal(p.xz, noises);
-    vec4 raw_color = vec4(0.0, 0.6,0.0, 1.0);
-
-
-    if (gl_Position.y <= 0.01) {
-        raw_color = vec4(0.5, 0.5, 0.0, 1.0);
-    } else {
+    if (height > 0.01) {
         Noise choice_noise;
         choice_noise.freq = 8;
         choice_noise.ampl = 2;
-        float y = gl_Position.y + compute_noise(p.xz, choice_noise);
-        if (y >= 0.16) {
-            raw_color = vec4(0.3, 0.3, 0.3, 1.0);
-        } else {
+        float y = height + compute_noise(position, choice_noise);
+        if (y < 0.16) {
             noises[0].freq = 0.6;
-            if (compute_noises(p.xz + 10.0, noises) > 0.07) {
-                raw_color = vec4(0.0, 0.35,0.0, 1.0);
+            if (compute_noises(position + 10.0, noises) > 0.07) {
+                gl_Position.y = height - 0.005;
             }
         }
-
     }
 
-    vec3 sun_pos = vec3(20.0, -200 * cos(daytime * PI / 12), 200 * sin(daytime * PI / 12));
-    color = max(dot(normalize(normalWS), normalize(sun_pos - p.xyz)), 0.1) * raw_color;
-    color.w = 1.0;
-  
-    if (gl_Position.y <= 0.0001) {
-        color = vec4(0.5, 0.5,0.0, 0.0);
-    }
 
-  gl_Position = projection_matrix * model_view_matrix * gl_Position;
-  if (aspect_ratio < 1.0) {
-    gl_Position.y *= aspect_ratio;
 
-  } else {
-    gl_Position.x /= aspect_ratio;
-  }
 }
