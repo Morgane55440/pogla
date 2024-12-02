@@ -5,8 +5,8 @@ use winit::{
 use glutin::{self, config::ConfigTemplateBuilder, context::{ContextAttributesBuilder, PossiblyCurrentContext}, display::{Display, GetGlDisplay}, prelude::{GlDisplay, NotCurrentGlContext}, surface::{GlSurface, Surface, SurfaceAttributesBuilder, WindowSurface}};
 use anyhow::Result;
 use std::{f32::consts::PI, ffi::CString, num::NonZero, ops::Range, time::SystemTime};
-mod fixes;
-use fixes::*;
+mod helpers;
+use helpers::*;
 use image::{ImageBuffer, ImageFormat, Rgba};
 use rand::random;
 
